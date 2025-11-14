@@ -1,0 +1,9 @@
+node_modules/
+vehicles.db
+.DS_Store
+*.log
+.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
