@@ -2,9 +2,22 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const Database = require('better-sqlite3');
 const path = require('path');
+const session = require('express-session');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Session middleware
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key-change-this-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: false, // Set to true if using HTTPS
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
 
 // Middleware
 app.use(bodyParser.json());
@@ -14,7 +27,7 @@ app.use(express.static('public'));
 // Initialize database
 const db = new Database('vehicles.db');
 
-// Create table if it doesn't exist
+// Create tables if they don't exist
 db.exec(`
   CREATE TABLE IF NOT EXISTS vehicles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,13 +38,92 @@ db.exec(`
     color TEXT NOT NULL,
     license_plate TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
 
+// Create default admin user if no users exist
+const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
+if (userCount.count === 0) {
+  const defaultPassword = 'admin123'; // Change this!
+  const hashedPassword = bcrypt.hashSync(defaultPassword, 10);
+  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', hashedPassword);
+  console.log('Default admin user created: username="admin", password="admin123"');
+  console.log('⚠️  IMPORTANT: Change the default password after first login!');
+}
+
+// Authentication middleware
+const requireAuth = (req, res, next) => {
+  if (req.session && req.session.userId) {
+    return next();
+  } else {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+};
+
 // API Routes
 
+// Authentication routes
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    res.json({ 
+      message: 'Login successful',
+      username: user.username
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Could not log out' });
+    }
+    res.json({ message: 'Logged out successfully' });
+  });
+});
+
+app.get('/api/auth/check', (req, res) => {
+  if (req.session && req.session.userId) {
+    res.json({ 
+      authenticated: true,
+      username: req.session.username
+    });
+  } else {
+    res.json({ authenticated: false });
+  }
+});
+
+// Protected API Routes - require authentication
 // Get all vehicles
-app.get('/api/vehicles', (req, res) => {
+app.get('/api/vehicles', requireAuth, (req, res) => {
   try {
     const vehicles = db.prepare('SELECT * FROM vehicles ORDER BY created_at DESC').all();
     res.json(vehicles);
@@ -41,7 +133,7 @@ app.get('/api/vehicles', (req, res) => {
 });
 
 // Add a new vehicle
-app.post('/api/vehicles', (req, res) => {
+app.post('/api/vehicles', requireAuth, (req, res) => {
   try {
     const { name, phone, make, model, color, license_plate } = req.body;
     
@@ -65,7 +157,7 @@ app.post('/api/vehicles', (req, res) => {
 });
 
 // Search vehicles
-app.get('/api/vehicles/search', (req, res) => {
+app.get('/api/vehicles/search', requireAuth, (req, res) => {
   try {
     const query = req.query.q || '';
     
@@ -92,7 +184,7 @@ app.get('/api/vehicles/search', (req, res) => {
 });
 
 // Delete a vehicle
-app.delete('/api/vehicles/:id', (req, res) => {
+app.delete('/api/vehicles/:id', requireAuth, (req, res) => {
   try {
     const { id } = req.params;
     const stmt = db.prepare('DELETE FROM vehicles WHERE id = ?');
@@ -108,9 +200,24 @@ app.delete('/api/vehicles/:id', (req, res) => {
   }
 });
 
+// Serve login page
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// Protect main page - redirect to login if not authenticated
+app.get('/', (req, res) => {
+  if (req.session && req.session.userId) {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } else {
+    res.redirect('/login');
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Login page: http://localhost:${PORT}/login`);
 });
 
 // Graceful shutdown

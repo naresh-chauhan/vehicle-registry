@@ -3,10 +3,48 @@ const vehicleForm = document.getElementById('vehicleForm');
 const searchInput = document.getElementById('searchInput');
 const clearSearchBtn = document.getElementById('clearSearch');
 const resultsContainer = document.getElementById('resultsContainer');
+const logoutBtn = document.getElementById('logoutBtn');
+const usernameDisplay = document.getElementById('usernameDisplay');
 
-// Load all vehicles on page load
-document.addEventListener('DOMContentLoaded', () => {
+// Check authentication and load data on page load
+document.addEventListener('DOMContentLoaded', async () => {
+    await checkAuth();
     loadAllVehicles();
+});
+
+// Check authentication status
+async function checkAuth() {
+    try {
+        const response = await fetch('/api/auth/check', {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        if (data.authenticated) {
+            usernameDisplay.textContent = `Logged in as: ${data.username}`;
+        } else {
+            window.location.href = '/login';
+        }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        window.location.href = '/login';
+    }
+}
+
+// Logout functionality
+logoutBtn.addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/logout', {
+            method: 'POST',
+            credentials: 'include'
+        });
+        
+        if (response.ok) {
+            window.location.href = '/login';
+        }
+    } catch (error) {
+        console.error('Logout failed:', error);
+    }
 });
 
 // Handle form submission
@@ -28,7 +66,8 @@ vehicleForm.addEventListener('submit', async (e) => {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(formData)
+            body: JSON.stringify(formData),
+            credentials: 'include'
         });
 
         const data = await response.json();
@@ -38,7 +77,11 @@ vehicleForm.addEventListener('submit', async (e) => {
             vehicleForm.reset();
             loadAllVehicles();
         } else {
-            showMessage(data.error || 'Error adding vehicle', 'error');
+            if (response.status === 401) {
+                window.location.href = '/login';
+            } else {
+                showMessage(data.error || 'Error adding vehicle', 'error');
+            }
         }
     } catch (error) {
         showMessage('Network error. Please try again.', 'error');
@@ -70,7 +113,15 @@ clearSearchBtn.addEventListener('click', () => {
 // Load all vehicles
 async function loadAllVehicles() {
     try {
-        const response = await fetch('/api/vehicles');
+        const response = await fetch('/api/vehicles', {
+            credentials: 'include'
+        });
+        
+        if (response.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
+        
         const vehicles = await response.json();
         displayVehicles(vehicles);
     } catch (error) {
@@ -82,7 +133,15 @@ async function loadAllVehicles() {
 // Search vehicles
 async function searchVehicles(query) {
     try {
-        const response = await fetch(`/api/vehicles/search?q=${encodeURIComponent(query)}`);
+        const response = await fetch(`/api/vehicles/search?q=${encodeURIComponent(query)}`, {
+            credentials: 'include'
+        });
+        
+        if (response.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
+        
         const vehicles = await response.json();
         displayVehicles(vehicles, query);
     } catch (error) {
@@ -169,7 +228,8 @@ async function deleteVehicle(id) {
 
     try {
         const response = await fetch(`/api/vehicles/${id}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            credentials: 'include'
         });
 
         const data = await response.json();
@@ -183,7 +243,11 @@ async function deleteVehicle(id) {
                 loadAllVehicles();
             }
         } else {
-            showMessage(data.error || 'Error deleting vehicle', 'error');
+            if (response.status === 401) {
+                window.location.href = '/login';
+            } else {
+                showMessage(data.error || 'Error deleting vehicle', 'error');
+            }
         }
     } catch (error) {
         showMessage('Network error. Please try again.', 'error');

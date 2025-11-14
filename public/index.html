@@ -9,8 +9,16 @@
 <body>
     <div class="container">
         <header>
-            <h1>🚗 Vehicle Registry</h1>
-            <p class="subtitle">Manage and search vehicle information</p>
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <div>
+                    <h1>🚗 Vehicle Registry</h1>
+                    <p class="subtitle">Manage and search vehicle information</p>
+                </div>
+                <div style="text-align: right;">
+                    <span id="usernameDisplay" style="color: white; margin-right: 15px;"></span>
+                    <button id="logoutBtn" class="btn btn-secondary" style="width: auto; padding: 8px 16px;">Logout</button>
+                </div>
+            </div>
         </header>
 
         <div class="main-content">

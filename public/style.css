@@ -23,6 +23,29 @@ header {
     margin-bottom: 40px;
 }
 
+header > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+@media (max-width: 768px) {
+    header > div {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    header > div > div:last-child {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+    }
+}
+
 header h1 {
     font-size: 3rem;
     margin-bottom: 10px;
