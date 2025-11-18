@@ -93,6 +93,22 @@ app.use(session({
 // Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Serve login page (before static files)
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// Protect main page - redirect to login if not authenticated
+app.get('/', (req, res) => {
+  if (req.session && req.session.userId) {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } else {
+    res.redirect('/login');
+  }
+});
+
+// Serve static files (CSS, JS, images, etc.)
 app.use(express.static('public'));
 
 // Create tables if they don't exist
@@ -332,19 +348,7 @@ app.delete('/api/vehicles/:id', requireAuth, async (req, res) => {
   }
 });
 
-// Serve login page
-app.get('/login', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
-
-// Protect main page - redirect to login if not authenticated
-app.get('/', (req, res) => {
-  if (req.session && req.session.userId) {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  } else {
-    res.redirect('/login');
-  }
-});
+// Routes for login and main page are defined above (before static files)
 
 // Start server
 app.listen(PORT, () => {

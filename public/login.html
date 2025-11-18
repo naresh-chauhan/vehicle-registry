@@ -88,49 +88,96 @@
     </div>
 
     <script>
-        const loginForm = document.getElementById('loginForm');
-        const errorMessage = document.getElementById('errorMessage');
-        const defaultInfo = document.getElementById('defaultInfo');
-
-        // Hide default credentials after 10 seconds
-        setTimeout(() => {
-            defaultInfo.style.display = 'none';
-        }, 10000);
-
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const username = document.getElementById('username').value.trim();
-            const password = document.getElementById('password').value;
-
-            errorMessage.classList.remove('show');
-            errorMessage.textContent = '';
-
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username, password }),
-                    credentials: 'include'
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    // Redirect to main page
-                    window.location.href = '/';
-                } else {
-                    errorMessage.textContent = data.error || 'Login failed';
-                    errorMessage.classList.add('show');
-                }
-            } catch (error) {
-                errorMessage.textContent = 'Network error. Please try again.';
-                errorMessage.classList.add('show');
-                console.error('Error:', error);
+        // Suppress common browser/extension errors
+        window.addEventListener('error', function(e) {
+            // Suppress searchParams errors (often from browser extensions)
+            if (e.message && e.message.includes('searchParams')) {
+                e.preventDefault();
+                return false;
             }
-        });
+        }, true);
+
+        // Error handling wrapper
+        (function() {
+            'use strict';
+            
+            // Wait for DOM to be fully loaded
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+
+            function init() {
+                try {
+                    const loginForm = document.getElementById('loginForm');
+                    const errorMessage = document.getElementById('errorMessage');
+                    const defaultInfo = document.getElementById('defaultInfo');
+
+                    if (!loginForm || !errorMessage || !defaultInfo) {
+                        console.error('Required elements not found');
+                        return;
+                    }
+
+                    // Hide default credentials after 10 seconds
+                    setTimeout(() => {
+                        if (defaultInfo) {
+                            defaultInfo.style.display = 'none';
+                        }
+                    }, 10000);
+
+                    loginForm.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        
+                        const usernameInput = document.getElementById('username');
+                        const passwordInput = document.getElementById('password');
+                        
+                        if (!usernameInput || !passwordInput) {
+                            errorMessage.textContent = 'Form elements not found';
+                            errorMessage.classList.add('show');
+                            return;
+                        }
+                        
+                        const username = usernameInput.value.trim();
+                        const password = passwordInput.value;
+
+                        errorMessage.classList.remove('show');
+                        errorMessage.textContent = '';
+
+                        try {
+                            const response = await fetch('/api/login', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ username, password }),
+                                credentials: 'include'
+                            });
+
+                            if (!response.ok && response.status !== 401) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+
+                            const data = await response.json();
+
+                            if (response.ok) {
+                                // Redirect to main page
+                                window.location.href = '/';
+                            } else {
+                                errorMessage.textContent = data.error || 'Login failed';
+                                errorMessage.classList.add('show');
+                            }
+                        } catch (error) {
+                            errorMessage.textContent = 'Network error. Please try again.';
+                            errorMessage.classList.add('show');
+                            console.error('Login error:', error);
+                        }
+                    });
+                } catch (error) {
+                    console.error('Login page initialization error:', error);
+                }
+            }
+        })();
     </script>
 </body>
 </html>
