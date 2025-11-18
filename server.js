@@ -114,6 +114,8 @@ app.use(express.static('public'));
 // Create tables if they don't exist
 async function initializeDatabase() {
   try {
+    console.log('Initializing database...');
+    
     if (usePostgreSQL) {
       // PostgreSQL table creation
       await dbHelpers.exec(`
@@ -135,6 +137,7 @@ async function initializeDatabase() {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      console.log('✅ PostgreSQL tables created/verified');
     } else {
       // SQLite table creation
       await dbHelpers.exec(`
@@ -156,6 +159,7 @@ async function initializeDatabase() {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      console.log('✅ SQLite tables created/verified');
     }
 
     // Create default admin user if no users exist
@@ -171,16 +175,26 @@ async function initializeDatabase() {
         'INSERT INTO users (username, password_hash) VALUES (?, ?)',
         ['admin', hashedPassword]
       );
-      console.log('Default admin user created: username="admin", password="admin123"');
+      console.log('✅ Default admin user created: username="admin", password="admin123"');
       console.log('⚠️  IMPORTANT: Change the default password after first login!');
+    } else {
+      console.log('✅ Users table already has data');
     }
   } catch (error) {
-    console.error('Database initialization error:', error);
+    console.error('❌ Database initialization error:', error);
+    throw error; // Re-throw to be caught by the caller
   }
 }
 
 // Initialize database on startup
-initializeDatabase();
+let dbReady = false;
+initializeDatabase().then(() => {
+  dbReady = true;
+  console.log('✅ Database initialized and ready');
+}).catch((error) => {
+  console.error('❌ Database initialization failed:', error);
+  process.exit(1);
+});
 
 // Authentication middleware
 const requireAuth = (req, res, next) => {
@@ -196,6 +210,11 @@ const requireAuth = (req, res, next) => {
 // Authentication routes
 app.post('/api/login', async (req, res) => {
   try {
+    // Check if database is ready
+    if (!dbReady) {
+      return res.status(503).json({ error: 'Database not ready. Please try again in a moment.' });
+    }
+
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -226,7 +245,8 @@ app.post('/api/login', async (req, res) => {
       username: user.username
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Login error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 

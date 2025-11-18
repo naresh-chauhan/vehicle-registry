@@ -154,11 +154,21 @@
                                 credentials: 'include'
                             });
 
-                            if (!response.ok && response.status !== 401) {
-                                throw new Error(`HTTP error! status: ${response.status}`);
+                            // Handle different response statuses
+                            if (response.status === 503) {
+                                // Database not ready
+                                errorMessage.textContent = 'Server is starting up. Please wait a moment and try again.';
+                                errorMessage.classList.add('show');
+                                return;
                             }
 
-                            const data = await response.json();
+                            let data;
+                            try {
+                                data = await response.json();
+                            } catch (jsonError) {
+                                // Response is not JSON
+                                throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                            }
 
                             if (response.ok) {
                                 // Redirect to main page
@@ -168,9 +178,13 @@
                                 errorMessage.classList.add('show');
                             }
                         } catch (error) {
-                            errorMessage.textContent = 'Network error. Please try again.';
-                            errorMessage.classList.add('show');
                             console.error('Login error:', error);
+                            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                                errorMessage.textContent = 'Cannot connect to server. Please check your connection and try again.';
+                            } else {
+                                errorMessage.textContent = error.message || 'Network error. Please try again.';
+                            }
+                            errorMessage.classList.add('show');
                         }
                     });
                 } catch (error) {
