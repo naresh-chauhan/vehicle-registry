@@ -1,12 +1,83 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const Database = require('better-sqlite3');
 const path = require('path');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Determine database type
+const usePostgreSQL = !!process.env.DATABASE_URL;
+let db; // Will be SQLite or PostgreSQL pool
+
+// Initialize database connection
+if (usePostgreSQL) {
+  // Use PostgreSQL (production)
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL?.includes('localhost') ? false : {
+      rejectUnauthorized: false
+    }
+  });
+  db = pool;
+  console.log('✅ Using PostgreSQL database');
+} else {
+  // Use SQLite (local development)
+  const Database = require('better-sqlite3');
+  db = new Database('vehicles.db');
+  console.log('✅ Using SQLite database (local)');
+}
+
+// Database helper functions
+const dbHelpers = {
+  // Execute query (works for both SQLite and PostgreSQL)
+  async query(sql, params = []) {
+    if (usePostgreSQL) {
+      // PostgreSQL uses $1, $2, etc. for parameters
+      // Convert ? placeholders to $1, $2, etc.
+      let paramIndex = 1;
+      const pgSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+      const result = await db.query(pgSql, params);
+      return {
+        rows: result.rows,
+        changes: result.rowCount || 0,
+        lastInsertRowId: result.rows[0]?.id || null
+      };
+    } else {
+      // SQLite
+      if (sql.trim().toUpperCase().startsWith('SELECT')) {
+        const stmt = db.prepare(sql);
+        const rows = stmt.all(...params);
+        return { rows, changes: rows.length, lastInsertRowId: null };
+      } else {
+        const stmt = db.prepare(sql);
+        const result = stmt.run(...params);
+        return {
+          rows: [],
+          changes: result.changes,
+          lastInsertRowId: result.lastInsertRowid
+        };
+      }
+    }
+  },
+
+  // Execute multiple statements (for table creation)
+  async exec(sql) {
+    if (usePostgreSQL) {
+      // Split by semicolon and execute each statement
+      const statements = sql.split(';').filter(s => s.trim());
+      for (const statement of statements) {
+        if (statement.trim()) {
+          await db.query(statement.trim());
+        }
+      }
+    } else {
+      db.exec(sql);
+    }
+  }
+};
 
 // Session middleware
 app.use(session({
@@ -14,7 +85,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: false, // Set to true if using HTTPS
+    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
@@ -24,39 +95,76 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Initialize database
-const db = new Database('vehicles.db');
-
 // Create tables if they don't exist
-db.exec(`
-  CREATE TABLE IF NOT EXISTS vehicles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    make TEXT NOT NULL,
-    model TEXT NOT NULL,
-    color TEXT NOT NULL,
-    license_plate TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+async function initializeDatabase() {
+  try {
+    if (usePostgreSQL) {
+      // PostgreSQL table creation
+      await dbHelpers.exec(`
+        CREATE TABLE IF NOT EXISTS vehicles (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          make TEXT NOT NULL,
+          model TEXT NOT NULL,
+          color TEXT NOT NULL,
+          license_plate TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    } else {
+      // SQLite table creation
+      await dbHelpers.exec(`
+        CREATE TABLE IF NOT EXISTS vehicles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          make TEXT NOT NULL,
+          model TEXT NOT NULL,
+          color TEXT NOT NULL,
+          license_plate TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    }
 
-// Create default admin user if no users exist
-const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
-if (userCount.count === 0) {
-  const defaultPassword = 'admin123'; // Change this!
-  const hashedPassword = bcrypt.hashSync(defaultPassword, 10);
-  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', hashedPassword);
-  console.log('Default admin user created: username="admin", password="admin123"');
-  console.log('⚠️  IMPORTANT: Change the default password after first login!');
+    // Create default admin user if no users exist
+    const userCount = await dbHelpers.query('SELECT COUNT(*) as count FROM users');
+    const count = usePostgreSQL 
+      ? parseInt(userCount.rows[0]?.count || 0) 
+      : (userCount.rows[0]?.count || 0);
+    
+    if (count === 0) {
+      const defaultPassword = 'admin123';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+      await dbHelpers.query(
+        'INSERT INTO users (username, password_hash) VALUES (?, ?)',
+        ['admin', hashedPassword]
+      );
+      console.log('Default admin user created: username="admin", password="admin123"');
+      console.log('⚠️  IMPORTANT: Change the default password after first login!');
+    }
+  } catch (error) {
+    console.error('Database initialization error:', error);
+  }
 }
+
+// Initialize database on startup
+initializeDatabase();
 
 // Authentication middleware
 const requireAuth = (req, res, next) => {
@@ -78,7 +186,12 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    const result = await dbHelpers.query(
+      'SELECT * FROM users WHERE username = ?',
+      [username]
+    );
+    
+    const user = usePostgreSQL ? result.rows[0] : result.rows[0];
     
     if (!user) {
       return res.status(401).json({ error: 'Invalid username or password' });
@@ -123,17 +236,19 @@ app.get('/api/auth/check', (req, res) => {
 
 // Protected API Routes - require authentication
 // Get all vehicles
-app.get('/api/vehicles', requireAuth, (req, res) => {
+app.get('/api/vehicles', requireAuth, async (req, res) => {
   try {
-    const vehicles = db.prepare('SELECT * FROM vehicles ORDER BY created_at DESC').all();
-    res.json(vehicles);
+    const result = await dbHelpers.query(
+      'SELECT * FROM vehicles ORDER BY created_at DESC'
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // Add a new vehicle
-app.post('/api/vehicles', requireAuth, (req, res) => {
+app.post('/api/vehicles', requireAuth, async (req, res) => {
   try {
     const { name, phone, make, model, color, license_plate } = req.body;
     
@@ -141,14 +256,28 @@ app.post('/api/vehicles', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
-    const stmt = db.prepare(`
-      INSERT INTO vehicles (name, phone, make, model, color, license_plate)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    let result;
+    if (usePostgreSQL) {
+      // PostgreSQL - use RETURNING to get the inserted ID
+      const pgResult = await db.query(
+        `INSERT INTO vehicles (name, phone, make, model, color, license_plate)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [name, phone, make, model, color, license_plate]
+      );
+      result = { id: pgResult.rows[0].id };
+    } else {
+      // SQLite
+      const sqliteResult = await dbHelpers.query(
+        `INSERT INTO vehicles (name, phone, make, model, color, license_plate)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [name, phone, make, model, color, license_plate]
+      );
+      result = { id: sqliteResult.lastInsertRowId };
+    }
     
-    const result = stmt.run(name, phone, make, model, color, license_plate);
     res.json({ 
-      id: result.lastInsertRowid,
+      id: result.id,
       message: 'Vehicle added successfully' 
     });
   } catch (error) {
@@ -157,7 +286,7 @@ app.post('/api/vehicles', requireAuth, (req, res) => {
 });
 
 // Search vehicles
-app.get('/api/vehicles/search', requireAuth, (req, res) => {
+app.get('/api/vehicles/search', requireAuth, async (req, res) => {
   try {
     const query = req.query.q || '';
     
@@ -166,29 +295,32 @@ app.get('/api/vehicles/search', requireAuth, (req, res) => {
     }
 
     const searchTerm = `%${query}%`;
-    const vehicles = db.prepare(`
-      SELECT * FROM vehicles 
-      WHERE name LIKE ? 
-         OR phone LIKE ?
-         OR make LIKE ?
-         OR model LIKE ?
-         OR color LIKE ?
-         OR license_plate LIKE ?
-      ORDER BY created_at DESC
-    `).all(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    const result = await dbHelpers.query(
+      `SELECT * FROM vehicles 
+       WHERE name LIKE ? 
+          OR phone LIKE ?
+          OR make LIKE ?
+          OR model LIKE ?
+          OR color LIKE ?
+          OR license_plate LIKE ?
+       ORDER BY created_at DESC`,
+      [searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm]
+    );
     
-    res.json(vehicles);
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // Delete a vehicle
-app.delete('/api/vehicles/:id', requireAuth, (req, res) => {
+app.delete('/api/vehicles/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const stmt = db.prepare('DELETE FROM vehicles WHERE id = ?');
-    const result = stmt.run(id);
+    const result = await dbHelpers.query(
+      'DELETE FROM vehicles WHERE id = ?',
+      [id]
+    );
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Vehicle not found' });
@@ -221,8 +353,11 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  db.close();
+process.on('SIGINT', async () => {
+  if (usePostgreSQL) {
+    await db.end();
+  } else {
+    db.close();
+  }
   process.exit(0);
 });
-
